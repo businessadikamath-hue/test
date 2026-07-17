@@ -1,8 +1,7 @@
 name: Fetch expanded official catalogs
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   fetch:
@@ -17,5 +16,78 @@ jobs:
           python -m pip install --quiet requests beautifulsoup4 lxml
           mkdir -p catalogs
           cat > /tmp/fetch_catalogs.py <<'PY'
-          import concurrent.futures
-          import json
+          import concurrent.futures, json, re, time
+          from urllib.parse import urlparse
+          import requests
+          from bs4 import BeautifulSoup
+          from lxml import etree
+
+          S=requests.Session(); S.headers['User-Agent']='OpportunityRadarCatalogAudit/1.0'
+          out=[]
+
+          # Coursera public catalog API
+          start=0; limit=100
+          while True:
+              u='https://api.coursera.org/api/courses.v1'
+              p={'start':start,'limit':limit,'fields':'name,slug,description,photoUrl,partnerIds,courseType'}
+              r=S.get(u,params=p,timeout=30); r.raise_for_status(); d=r.json(); els=d.get('elements',[])
+              if not els: break
+              for x in els:
+                  slug=x.get('slug') or x.get('id')
+                  title=(x.get('name') or '').strip()
+                  if not slug or not title: continue
+                  out.append({'source':'Coursera','id':str(x.get('id') or slug),'title':title,'summary':re.sub(r'\s+',' ',x.get('description') or '').strip(),'url':'https://www.coursera.org/learn/'+slug,'type':x.get('courseType') or 'course'})
+              start += len(els)
+              if len(els)<limit or start>30000: break
+
+          # MIT OpenCourseWare sitemap course pages
+          def xml_locs(url):
+              r=S.get(url,timeout=45); r.raise_for_status(); root=etree.fromstring(r.content)
+              return [e.text.strip() for e in root.xpath('//*[local-name()="loc"]') if e.text]
+          locs=[]
+          for u in xml_locs('https://ocw.mit.edu/sitemap.xml'):
+              if u.endswith('.xml'):
+                  try: locs.extend(xml_locs(u))
+                  except Exception: pass
+              else: locs.append(u)
+          course_urls=[]; seen=set()
+          for u in locs:
+              m=re.match(r'https://ocw\.mit\.edu/courses/[^/]+/[^/]+/?$',u)
+              if m and u not in seen:
+                  seen.add(u); course_urls.append(u)
+          def fetch_mit(u):
+              try:
+                  r=S.get(u,timeout=25); r.raise_for_status(); soup=BeautifulSoup(r.text,'lxml')
+                  title=''
+                  og=soup.find('meta',property='og:title')
+                  if og: title=(og.get('content') or '').strip()
+                  if not title and soup.title: title=soup.title.get_text(' ',strip=True)
+                  title=re.sub(r'\s*\|\s*MIT OpenCourseWare.*$','',title).strip()
+                  desc=''
+                  md=soup.find('meta',attrs={'name':'description'})
+                  if md: desc=re.sub(r'\s+',' ',md.get('content') or '').strip()
+                  if not title: return None
+                  slug=urlparse(u).path.strip('/').split('/')[-1]
+                  return {'source':'MIT OpenCourseWare','id':slug,'title':title,'summary':desc,'url':u,'type':'open course'}
+              except Exception: return None
+          with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+              for x in ex.map(fetch_mit,course_urls):
+                  if x: out.append(x)
+
+          # Deduplicate exact source/id and canonical URL
+          ded=[]; keys=set(); urls=set()
+          for x in out:
+              k=(x['source'].lower(),x['id'].lower()); u=x['url'].rstrip('/').lower()
+              if k in keys or u in urls: continue
+              keys.add(k); urls.add(u); ded.append(x)
+          with open('catalogs/expanded-catalog.json','w',encoding='utf-8') as f: json.dump(ded,f,ensure_ascii=False)
+          with open('catalogs/stats.json','w') as f: json.dump({'total':len(ded),'by_source':{s:sum(1 for x in ded if x['source']==s) for s in sorted({x['source'] for x in ded})}},f)
+          print(json.dumps({'total':len(ded),'by_source':{s:sum(1 for x in ded if x['source']==s) for s in sorted({x['source'] for x in ded})}}))
+          PY
+          python /tmp/fetch_catalogs.py
+      - name: Upload catalogs
+        uses: actions/upload-artifact@v4
+        with:
+          name: expanded-official-catalogs
+          path: catalogs/
+          retention-days: 1
