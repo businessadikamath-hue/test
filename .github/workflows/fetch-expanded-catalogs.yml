@@ -1,0 +1,21 @@
+name: Fetch expanded official catalogs
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch and normalize official catalogs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet requests beautifulsoup4 lxml
+          mkdir -p catalogs
+          cat > /tmp/fetch_catalogs.py <<'PY'
+          import concurrent.futures
+          import json
