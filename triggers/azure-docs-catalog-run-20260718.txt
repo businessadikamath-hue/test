@@ -1,0 +1,1 @@
+Run the read-only official Azure documentation catalog extraction.
