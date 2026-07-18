@@ -1,4 +1,4 @@
-name: Fetch official technical learning catalogs
+name: Fetch official Azure learning catalog
 on:
   pull_request:
     branches: [main]
@@ -9,73 +9,51 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch and normalize provider-maintained learning content
+      - name: Fetch and normalize official Azure documentation
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --quiet pyyaml
           mkdir -p catalogs repos
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/mdn/content.git repos/mdn-content
-          git -C repos/mdn-content sparse-checkout set files
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/kubernetes/website.git repos/kubernetes-website
-          git -C repos/kubernetes-website sparse-checkout set content/en/docs content/en/training
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/MicrosoftDocs/azure-docs.git repos/azure-docs
+          git -C repos/azure-docs sparse-checkout set articles/ai-services articles/app-service articles/azure-functions articles/virtual-machines articles/storage articles/networking
           python - <<'PY'
-          import json, os, re
+          import json, re
           from pathlib import Path
           import yaml
 
           def frontmatter(text):
-              if not text.startswith('---'):
-                  return {}
+              if not text.startswith('---'): return {}
               parts=text.split('---',2)
               if len(parts)<3: return {}
               try: return yaml.safe_load(parts[1]) or {}
               except Exception: return {}
 
-          rows=[]
-          # MDN English content: each index.md is a provider-maintained standalone learning/reference page.
-          root=Path('repos/mdn-content/files/en-us')
-          for p in root.rglob('index.md'):
-              try: text=p.read_text(encoding='utf-8')
-              except Exception: continue
-              fm=frontmatter(text)
-              title=str(fm.get('title') or '').strip()
-              slug=str(fm.get('slug') or '').strip()
-              desc=str(fm.get('short-title') or fm.get('description') or '').strip()
-              page_type=str(fm.get('page-type') or fm.get('page_type') or 'documentation').strip()
-              if not title or not slug: continue
-              url='https://developer.mozilla.org/en-US/docs/'+slug.lstrip('/')
-              rows.append({'source':'MDN Web Docs','id':'mdn:'+slug,'title':title,'summary':desc,'url':url,'type':page_type})
-
-          # Kubernetes official English documentation/training pages.
-          root=Path('repos/kubernetes-website/content/en')
+          rows=[]; root=Path('repos/azure-docs/articles')
           for p in root.rglob('*.md'):
               try: text=p.read_text(encoding='utf-8')
               except Exception: continue
               fm=frontmatter(text)
-              title=str(fm.get('title') or '').strip()
-              desc=str(fm.get('description') or fm.get('content_type') or '').strip()
+              title=str(fm.get('title') or fm.get('titleSuffix') or '').strip()
+              desc=str(fm.get('description') or '').strip()
               if not title: continue
-              rel=p.relative_to(root).as_posix()
-              if rel.endswith('/_index.md'): rel=rel[:-10]
-              elif rel.endswith('.md'): rel=rel[:-3]
-              rel=rel.strip('/')
-              url='https://kubernetes.io/docs/'+rel[5:] if rel.startswith('docs/') else 'https://kubernetes.io/'+rel
-              rows.append({'source':'Kubernetes Documentation','id':'k8s:'+rel,'title':title,'summary':desc,'url':url.rstrip('/')+'/' ,'type':str(fm.get('content_type') or 'documentation')})
-
+              rel=p.relative_to(root).as_posix()[:-3]
+              if rel.endswith('/index'): rel=rel[:-6]
+              url='https://learn.microsoft.com/azure/'+rel.strip('/')
+              rows.append({'source':'Microsoft Azure Documentation','id':'azure-docs:'+rel,'title':title,'summary':desc,'url':url,'type':str(fm.get('ms.topic') or 'documentation')})
           ded=[]; seen=set()
           for x in rows:
-              k=(x['source'].casefold(),x['url'].rstrip('/').casefold())
+              k=x['url'].rstrip('/').casefold()
               if k in seen: continue
               seen.add(k); ded.append(x)
-          json.dump(ded,open('catalogs/official-learning-content.json','w',encoding='utf-8'),ensure_ascii=False)
-          stats={'total':len(ded),'by_source':{s:sum(1 for x in ded if x['source']==s) for s in sorted({x['source'] for x in ded})}}
+          json.dump(ded,open('catalogs/azure-documentation.json','w',encoding='utf-8'),ensure_ascii=False)
+          stats={'total':len(ded)}
           json.dump(stats,open('catalogs/stats.json','w'),indent=2)
           print(json.dumps(stats,indent=2))
           PY
       - name: Upload catalog
         uses: actions/upload-artifact@v4
         with:
-          name: official-mdn-kubernetes-learning-catalog
+          name: official-azure-documentation-catalog
           path: catalogs/
           retention-days: 1
