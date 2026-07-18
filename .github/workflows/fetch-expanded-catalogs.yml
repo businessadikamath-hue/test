@@ -1,4 +1,4 @@
-name: Fetch achievement registry
+name: Fetch official learning catalogs
 on:
   pull_request:
     branches: [main]
@@ -9,18 +9,78 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch Microsoft Learn achievement registry
+      - name: Fetch official public learning-resource catalogs
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --quiet requests
           mkdir -p catalogs
-          curl --fail --location --retry 4 --compressed \
-            'https://raw.githubusercontent.com/MicrosoftDocs/learn/main/learn-pr/achievements.yml' \
-            --output catalogs/microsoft-learn-achievements.yml
-          wc -l catalogs/microsoft-learn-achievements.yml
-      - name: Upload registry
+          cat > /tmp/fetch_catalogs.py <<'PY'
+          import json, time
+          import requests
+
+          s = requests.Session()
+          s.headers['User-Agent'] = 'OpportunityRadarCatalogAudit/1.0'
+          stats = {}
+
+          def fetch_paginated(name, first_url, max_items=50000):
+              out = []
+              url = first_url
+              pages = 0
+              while url and len(out) < max_items:
+                  r = s.get(url, timeout=60)
+                  r.raise_for_status()
+                  data = r.json()
+                  pages += 1
+                  if isinstance(data, dict) and isinstance(data.get('results'), list):
+                      out.extend(data['results'])
+                      url = data.get('next')
+                  elif isinstance(data, list):
+                      out.extend(data)
+                      url = None
+                  else:
+                      out.append(data)
+                      url = None
+                  if pages > 1000:
+                      break
+                  time.sleep(0.03)
+              with open(f'catalogs/{name}.json', 'w', encoding='utf-8') as f:
+                  json.dump(out, f, ensure_ascii=False)
+              stats[name] = {'items': len(out), 'pages': pages}
+              return out
+
+          # MIT Learn is MIT's official public learning-resource catalog API.
+          mit = fetch_paginated(
+              'mit-learning-resources',
+              'https://learn.mit.edu/api/v1/learning_resources/?limit=500&offset=0',
+              50000,
+          )
+
+          # National Library of Medicine official Learning Resources Database API.
+          try:
+              r = s.get('https://learn.nlm.nih.gov/rest/learning-resources/all/', timeout=90)
+              r.raise_for_status()
+              nlm = r.json()
+              with open('catalogs/nlm-learning-resources.json', 'w', encoding='utf-8') as f:
+                  json.dump(nlm, f, ensure_ascii=False)
+              if isinstance(nlm, list):
+                  n = len(nlm)
+              elif isinstance(nlm, dict):
+                  n = len(nlm.get('results') or nlm.get('items') or nlm)
+              else:
+                  n = 1
+              stats['nlm-learning-resources'] = {'items': n}
+          except Exception as e:
+              stats['nlm-learning-resources'] = {'error': repr(e)}
+
+          with open('catalogs/stats.json', 'w') as f:
+              json.dump(stats, f, indent=2)
+          print(json.dumps(stats, indent=2))
+          PY
+          python /tmp/fetch_catalogs.py
+      - name: Upload catalogs
         uses: actions/upload-artifact@v4
         with:
-          name: microsoft-learn-achievements
+          name: official-mit-nlm-learning-catalogs
           path: catalogs/
           retention-days: 1
