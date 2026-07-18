@@ -1,4 +1,4 @@
-name: Fetch official learning catalogs
+name: Fetch official Khan Academy catalog
 on:
   pull_request:
     branches: [main]
@@ -9,80 +9,53 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch official public learning-resource catalogs
+      - name: Fetch and normalize official Khan Academy catalog
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --quiet requests
           mkdir -p catalogs
-          cat > /tmp/fetch_catalogs.py <<'PY'
-          import json, time
-          import requests
-
-          s = requests.Session()
-          s.headers['User-Agent'] = 'OpportunityRadarCatalogAudit/1.0'
-          stats = {}
-
-          def fetch_paginated(name, first_url, max_items=50000):
-              out = []
-              url = first_url
-              pages = 0
-              while url and len(out) < max_items:
-                  r = s.get(url, timeout=60)
-                  r.raise_for_status()
-                  data = r.json()
-                  pages += 1
-                  if isinstance(data, dict) and isinstance(data.get('results'), list):
-                      out.extend(data['results'])
-                      url = data.get('next')
-                  elif isinstance(data, list):
-                      out.extend(data)
-                      url = None
-                  else:
-                      out.append(data)
-                      url = None
-                  if pages > 1000:
-                      break
-                  time.sleep(0.03)
-              with open(f'catalogs/{name}.json', 'w', encoding='utf-8') as f:
-                  json.dump(out, f, ensure_ascii=False)
-              stats[name] = {'items': len(out), 'pages': pages}
-
-          for endpoint in [
-              'https://api.learn.mit.edu/api/v1/learning_resources/?limit=500&offset=0',
-              'https://api.learn.mit.edu/api/v1/courses/?limit=500&offset=0',
-          ]:
+          python - <<'PY'
+          import json, requests
+          s=requests.Session(); s.headers['User-Agent']='OpportunityRadarCatalogAudit/1.0'
+          endpoints=[
+            'https://www.khanacademy.org/api/v1/topictree',
+            'https://www.khanacademy.org/api/internal/graphql/ContentForPath',
+          ]
+          stats={}; data=None; used=None
+          for u in endpoints[:1]:
               try:
-                  fetch_paginated('mit-learning-resources', endpoint, 50000)
-                  stats['mit-learning-resources']['endpoint'] = endpoint
-                  break
-              except Exception as e:
-                  stats.setdefault('mit-attempt-errors', []).append({'endpoint': endpoint, 'error': repr(e)})
-
-          try:
-              r = s.get('https://learn.nlm.nih.gov/rest/learning-resources/all/', timeout=90)
-              r.raise_for_status()
-              nlm = r.json()
-              with open('catalogs/nlm-learning-resources.json', 'w', encoding='utf-8') as f:
-                  json.dump(nlm, f, ensure_ascii=False)
-              if isinstance(nlm, list):
-                  n = len(nlm)
-              elif isinstance(nlm, dict):
-                  n = len(nlm.get('results') or nlm.get('items') or nlm)
-              else:
-                  n = 1
-              stats['nlm-learning-resources'] = {'items': n}
-          except Exception as e:
-              stats['nlm-learning-resources'] = {'error': repr(e)}
-
-          with open('catalogs/stats.json', 'w') as f:
-              json.dump(stats, f, indent=2)
-          print(json.dumps(stats, indent=2))
+                  r=s.get(u,timeout=180); stats[u]={'status':r.status_code,'bytes':len(r.content)}
+                  r.raise_for_status(); data=r.json(); used=u; break
+              except Exception as e: stats[u]={'error':repr(e)}
+          if data is not None:
+              json.dump(data,open('catalogs/khan-academy-topictree.json','w',encoding='utf-8'),ensure_ascii=False)
+              nodes=[]
+              def walk(x):
+                  if isinstance(x,dict):
+                      kind=x.get('kind') or x.get('node_kind') or x.get('type')
+                      title=x.get('title') or x.get('translated_title') or x.get('display_name')
+                      url=x.get('ka_url') or x.get('url') or x.get('relative_url')
+                      ident=x.get('id') or x.get('slug') or x.get('node_slug')
+                      if kind and title and (ident or url):
+                          nodes.append({'id':ident,'kind':kind,'title':title,'description':x.get('description') or x.get('translated_description') or '', 'url':url})
+                      for v in x.values(): walk(v)
+                  elif isinstance(x,list):
+                      for v in x: walk(v)
+              walk(data)
+              ded=[]; seen=set()
+              for x in nodes:
+                  k=(str(x.get('id') or ''),str(x.get('url') or ''),str(x.get('title') or ''))
+                  if k in seen: continue
+                  seen.add(k); ded.append(x)
+              json.dump(ded,open('catalogs/khan-academy-content.json','w',encoding='utf-8'),ensure_ascii=False)
+              stats['normalized_items']=len(ded); stats['used_endpoint']=used
+          json.dump(stats,open('catalogs/stats.json','w'),indent=2)
+          print(json.dumps(stats,indent=2))
           PY
-          python /tmp/fetch_catalogs.py
-      - name: Upload catalogs
+      - name: Upload catalog
         uses: actions/upload-artifact@v4
         with:
-          name: official-mit-nlm-learning-catalogs
+          name: official-khan-academy-catalog
           path: catalogs/
           retention-days: 1
