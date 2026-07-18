@@ -47,16 +47,18 @@ jobs:
               with open(f'catalogs/{name}.json', 'w', encoding='utf-8') as f:
                   json.dump(out, f, ensure_ascii=False)
               stats[name] = {'items': len(out), 'pages': pages}
-              return out
 
-          # MIT Learn is MIT's official public learning-resource catalog API.
-          mit = fetch_paginated(
-              'mit-learning-resources',
-              'https://learn.mit.edu/api/v1/learning_resources/?limit=500&offset=0',
-              50000,
-          )
+          for endpoint in [
+              'https://api.learn.mit.edu/api/v1/learning_resources/?limit=500&offset=0',
+              'https://api.learn.mit.edu/api/v1/courses/?limit=500&offset=0',
+          ]:
+              try:
+                  fetch_paginated('mit-learning-resources', endpoint, 50000)
+                  stats['mit-learning-resources']['endpoint'] = endpoint
+                  break
+              except Exception as e:
+                  stats.setdefault('mit-attempt-errors', []).append({'endpoint': endpoint, 'error': repr(e)})
 
-          # National Library of Medicine official Learning Resources Database API.
           try:
               r = s.get('https://learn.nlm.nih.gov/rest/learning-resources/all/', timeout=90)
               r.raise_for_status()
