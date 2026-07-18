@@ -1,4 +1,4 @@
-name: Fetch official Khan Academy catalog
+name: Fetch official technical learning catalogs
 on:
   pull_request:
     branches: [main]
@@ -9,53 +9,73 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch and normalize official Khan Academy catalog
+      - name: Fetch and normalize provider-maintained learning content
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --quiet requests
-          mkdir -p catalogs
+          python -m pip install --quiet pyyaml
+          mkdir -p catalogs repos
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/mdn/content.git repos/mdn-content
+          git -C repos/mdn-content sparse-checkout set files
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/kubernetes/website.git repos/kubernetes-website
+          git -C repos/kubernetes-website sparse-checkout set content/en/docs content/en/training
           python - <<'PY'
-          import json, requests
-          s=requests.Session(); s.headers['User-Agent']='OpportunityRadarCatalogAudit/1.0'
-          endpoints=[
-            'https://www.khanacademy.org/api/v1/topictree',
-            'https://www.khanacademy.org/api/internal/graphql/ContentForPath',
-          ]
-          stats={}; data=None; used=None
-          for u in endpoints[:1]:
-              try:
-                  r=s.get(u,timeout=180); stats[u]={'status':r.status_code,'bytes':len(r.content)}
-                  r.raise_for_status(); data=r.json(); used=u; break
-              except Exception as e: stats[u]={'error':repr(e)}
-          if data is not None:
-              json.dump(data,open('catalogs/khan-academy-topictree.json','w',encoding='utf-8'),ensure_ascii=False)
-              nodes=[]
-              def walk(x):
-                  if isinstance(x,dict):
-                      kind=x.get('kind') or x.get('node_kind') or x.get('type')
-                      title=x.get('title') or x.get('translated_title') or x.get('display_name')
-                      url=x.get('ka_url') or x.get('url') or x.get('relative_url')
-                      ident=x.get('id') or x.get('slug') or x.get('node_slug')
-                      if kind and title and (ident or url):
-                          nodes.append({'id':ident,'kind':kind,'title':title,'description':x.get('description') or x.get('translated_description') or '', 'url':url})
-                      for v in x.values(): walk(v)
-                  elif isinstance(x,list):
-                      for v in x: walk(v)
-              walk(data)
-              ded=[]; seen=set()
-              for x in nodes:
-                  k=(str(x.get('id') or ''),str(x.get('url') or ''),str(x.get('title') or ''))
-                  if k in seen: continue
-                  seen.add(k); ded.append(x)
-              json.dump(ded,open('catalogs/khan-academy-content.json','w',encoding='utf-8'),ensure_ascii=False)
-              stats['normalized_items']=len(ded); stats['used_endpoint']=used
+          import json, os, re
+          from pathlib import Path
+          import yaml
+
+          def frontmatter(text):
+              if not text.startswith('---'):
+                  return {}
+              parts=text.split('---',2)
+              if len(parts)<3: return {}
+              try: return yaml.safe_load(parts[1]) or {}
+              except Exception: return {}
+
+          rows=[]
+          # MDN English content: each index.md is a provider-maintained standalone learning/reference page.
+          root=Path('repos/mdn-content/files/en-us')
+          for p in root.rglob('index.md'):
+              try: text=p.read_text(encoding='utf-8')
+              except Exception: continue
+              fm=frontmatter(text)
+              title=str(fm.get('title') or '').strip()
+              slug=str(fm.get('slug') or '').strip()
+              desc=str(fm.get('short-title') or fm.get('description') or '').strip()
+              page_type=str(fm.get('page-type') or fm.get('page_type') or 'documentation').strip()
+              if not title or not slug: continue
+              url='https://developer.mozilla.org/en-US/docs/'+slug.lstrip('/')
+              rows.append({'source':'MDN Web Docs','id':'mdn:'+slug,'title':title,'summary':desc,'url':url,'type':page_type})
+
+          # Kubernetes official English documentation/training pages.
+          root=Path('repos/kubernetes-website/content/en')
+          for p in root.rglob('*.md'):
+              try: text=p.read_text(encoding='utf-8')
+              except Exception: continue
+              fm=frontmatter(text)
+              title=str(fm.get('title') or '').strip()
+              desc=str(fm.get('description') or fm.get('content_type') or '').strip()
+              if not title: continue
+              rel=p.relative_to(root).as_posix()
+              if rel.endswith('/_index.md'): rel=rel[:-10]
+              elif rel.endswith('.md'): rel=rel[:-3]
+              rel=rel.strip('/')
+              url='https://kubernetes.io/docs/'+rel[5:] if rel.startswith('docs/') else 'https://kubernetes.io/'+rel
+              rows.append({'source':'Kubernetes Documentation','id':'k8s:'+rel,'title':title,'summary':desc,'url':url.rstrip('/')+'/' ,'type':str(fm.get('content_type') or 'documentation')})
+
+          ded=[]; seen=set()
+          for x in rows:
+              k=(x['source'].casefold(),x['url'].rstrip('/').casefold())
+              if k in seen: continue
+              seen.add(k); ded.append(x)
+          json.dump(ded,open('catalogs/official-learning-content.json','w',encoding='utf-8'),ensure_ascii=False)
+          stats={'total':len(ded),'by_source':{s:sum(1 for x in ded if x['source']==s) for s in sorted({x['source'] for x in ded})}}
           json.dump(stats,open('catalogs/stats.json','w'),indent=2)
           print(json.dumps(stats,indent=2))
           PY
       - name: Upload catalog
         uses: actions/upload-artifact@v4
         with:
-          name: official-khan-academy-catalog
+          name: official-mdn-kubernetes-learning-catalog
           path: catalogs/
           retention-days: 1
