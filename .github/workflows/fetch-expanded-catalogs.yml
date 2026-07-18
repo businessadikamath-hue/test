@@ -1,4 +1,4 @@
-name: Fetch expanded official catalogs
+name: Fetch achievement registry
 on:
   pull_request:
     branches: [main]
@@ -9,38 +9,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch official Coursera catalog
+      - name: Fetch Microsoft Learn achievement registry
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --quiet requests
           mkdir -p catalogs
-          python - <<'PY'
-          import json,re,requests
-          s=requests.Session(); s.headers['User-Agent']='OpportunityRadarCatalogAudit/1.0'
-          out=[]; start=0; limit=100
-          while True:
-              r=s.get('https://api.coursera.org/api/courses.v1',params={'start':start,'limit':limit,'fields':'name,slug,description,photoUrl,partnerIds,courseType'},timeout=30)
-              r.raise_for_status(); els=r.json().get('elements',[])
-              if not els: break
-              for x in els:
-                  slug=x.get('slug') or x.get('id'); title=(x.get('name') or '').strip()
-                  if slug and title:
-                      out.append({'source':'Coursera','id':str(x.get('id') or slug),'title':title,'summary':re.sub(r'\s+',' ',x.get('description') or '').strip(),'url':'https://www.coursera.org/learn/'+slug,'type':x.get('courseType') or 'course'})
-              start += len(els)
-              if len(els)<limit or start>30000: break
-          ded=[]; seen=set()
-          for x in out:
-              k=(x['id'].lower(),x['url'].rstrip('/').lower())
-              if k in seen: continue
-              seen.add(k); ded.append(x)
-          json.dump(ded,open('catalogs/expanded-catalog.json','w',encoding='utf-8'),ensure_ascii=False)
-          json.dump({'total':len(ded),'by_source':{'Coursera':len(ded)}},open('catalogs/stats.json','w'))
-          print({'total':len(ded)})
-          PY
-      - name: Upload catalogs
+          curl --fail --location --retry 4 --compressed \
+            'https://raw.githubusercontent.com/MicrosoftDocs/learn/main/learn-pr/achievements.yml' \
+            --output catalogs/microsoft-learn-achievements.yml
+          wc -l catalogs/microsoft-learn-achievements.yml
+      - name: Upload registry
         uses: actions/upload-artifact@v4
         with:
-          name: expanded-official-catalogs
+          name: microsoft-learn-achievements
           path: catalogs/
           retention-days: 1
