@@ -1,4 +1,4 @@
-name: Fetch full official Azure documentation catalog
+name: Fetch official .NET documentation catalog
 on:
   pull_request:
     branches: [main]
@@ -9,15 +9,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Extract full provider-maintained Azure documentation catalog
+      - name: Extract provider-maintained .NET documentation catalog
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --quiet pyyaml
           mkdir -p catalogs repos
-          git clone --depth 1 https://github.com/MicrosoftDocs/azure-docs.git repos/azure-docs
+          git clone --depth 1 https://github.com/dotnet/docs.git repos/dotnet-docs
           python - <<'PY'
-          import json
+          import json, re
           from pathlib import Path
           import yaml
 
@@ -33,7 +33,7 @@ jobs:
                   return {}
 
           rows = []
-          root = Path('repos/azure-docs/articles')
+          root = Path('repos/dotnet-docs/docs')
           for p in root.rglob('*.md'):
               try:
                   text = p.read_text(encoding='utf-8')
@@ -43,14 +43,17 @@ jobs:
               title = str(meta.get('title') or '').strip()
               description = str(meta.get('description') or '').strip()
               if not title:
+                  match = re.search(r'^#\s+(.+?)\s*$', text, re.MULTILINE)
+                  title = match.group(1).strip() if match else ''
+              if not title:
                   continue
               rel = p.relative_to(root).as_posix()[:-3]
               if rel.endswith('/index'):
                   rel = rel[:-6]
-              url = 'https://learn.microsoft.com/azure/' + rel.strip('/')
+              url = 'https://learn.microsoft.com/dotnet/' + rel.strip('/')
               rows.append({
-                  'source': 'Microsoft Azure Documentation',
-                  'id': 'azure-docs:' + rel,
+                  'source': '.NET Documentation',
+                  'id': 'dotnet-docs:' + rel,
                   'title': title,
                   'summary': description,
                   'url': url,
@@ -64,7 +67,7 @@ jobs:
                   continue
               seen.add(key)
               deduped.append(item)
-          with open('catalogs/azure-documentation-full.json', 'w', encoding='utf-8') as f:
+          with open('catalogs/dotnet-documentation.json', 'w', encoding='utf-8') as f:
               json.dump(deduped, f, ensure_ascii=False)
           with open('catalogs/stats.json', 'w') as f:
               json.dump({'total': len(deduped)}, f, indent=2)
@@ -73,6 +76,6 @@ jobs:
       - name: Upload catalog
         uses: actions/upload-artifact@v4
         with:
-          name: official-azure-documentation-full-catalog
+          name: official-dotnet-documentation-catalog
           path: catalogs/
           retention-days: 1
