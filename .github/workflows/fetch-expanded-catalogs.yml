@@ -1,4 +1,4 @@
-name: Fetch expanded official Azure learning catalog
+name: Fetch full official Azure documentation catalog
 on:
   pull_request:
     branches: [main]
@@ -9,45 +9,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Fetch and normalize additional official Azure documentation
+      - name: Extract full provider-maintained Azure documentation catalog
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --quiet pyyaml
           mkdir -p catalogs repos
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/MicrosoftDocs/azure-docs.git repos/azure-docs
-          git -C repos/azure-docs sparse-checkout set articles/aks articles/container-apps articles/container-instances articles/cosmos-db articles/machine-learning articles/devops articles/azure-sql articles/postgresql articles/mysql articles/security articles/active-directory articles/logic-apps articles/api-management articles/service-bus-messaging articles/event-grid articles/iot-hub articles/data-factory articles/synapse-analytics articles/azure-monitor articles/governance
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import yaml
-          def fm(text):
-              if not text.startswith('---'): return {}
-              parts=text.split('---',2)
-              if len(parts)<3: return {}
-              try: return yaml.safe_load(parts[1]) or {}
-              except Exception: return {}
-          rows=[]; root=Path('repos/azure-docs/articles')
-          for p in root.rglob('*.md'):
-              try: text=p.read_text(encoding='utf-8')
-              except Exception: continue
-              m=fm(text); title=str(m.get('title') or '').strip(); desc=str(m.get('description') or '').strip()
-              if not title: continue
-              rel=p.relative_to(root).as_posix()[:-3]
-              if rel.endswith('/index'): rel=rel[:-6]
-              rows.append({'source':'Microsoft Azure Documentation','id':'azure-docs:'+rel,'title':title,'summary':desc,'url':'https://learn.microsoft.com/azure/'+rel.strip('/'),'type':str(m.get('ms.topic') or 'documentation')})
-          ded=[]; seen=set()
-          for x in rows:
-              k=x['url'].rstrip('/').casefold()
-              if k in seen: continue
-              seen.add(k); ded.append(x)
-          json.dump(ded,open('catalogs/azure-documentation-expanded.json','w',encoding='utf-8'),ensure_ascii=False)
-          json.dump({'total':len(ded)},open('catalogs/stats.json','w'),indent=2)
-          print({'total':len(ded)})
-          PY
-      - name: Upload catalog
-        uses: actions/upload-artifact@v4
-        with:
-          name: official-azure-documentation-expanded-catalog
-          path: catalogs/
-          retention-days: 1
+          git clone --depth 1 --filter=
