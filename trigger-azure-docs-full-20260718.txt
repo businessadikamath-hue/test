@@ -1,0 +1,1 @@
+Trigger full official Azure documentation catalog extraction.
