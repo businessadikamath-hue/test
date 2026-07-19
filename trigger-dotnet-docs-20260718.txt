@@ -1,0 +1,1 @@
+Trigger official .NET documentation catalog extraction.
