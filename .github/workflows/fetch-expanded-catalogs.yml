@@ -15,4 +15,64 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet pyyaml
           mkdir -p catalogs repos
-          git clone --depth 1 --filter=
+          git clone --depth 1 https://github.com/MicrosoftDocs/azure-docs.git repos/azure-docs
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+
+          def frontmatter(text):
+              if not text.startswith('---'):
+                  return {}
+              parts = text.split('---', 2)
+              if len(parts) < 3:
+                  return {}
+              try:
+                  return yaml.safe_load(parts[1]) or {}
+              except Exception:
+                  return {}
+
+          rows = []
+          root = Path('repos/azure-docs/articles')
+          for p in root.rglob('*.md'):
+              try:
+                  text = p.read_text(encoding='utf-8')
+              except Exception:
+                  continue
+              meta = frontmatter(text)
+              title = str(meta.get('title') or '').strip()
+              description = str(meta.get('description') or '').strip()
+              if not title:
+                  continue
+              rel = p.relative_to(root).as_posix()[:-3]
+              if rel.endswith('/index'):
+                  rel = rel[:-6]
+              url = 'https://learn.microsoft.com/azure/' + rel.strip('/')
+              rows.append({
+                  'source': 'Microsoft Azure Documentation',
+                  'id': 'azure-docs:' + rel,
+                  'title': title,
+                  'summary': description,
+                  'url': url,
+                  'type': str(meta.get('ms.topic') or 'documentation'),
+              })
+          deduped = []
+          seen = set()
+          for item in rows:
+              key = item['url'].rstrip('/').casefold()
+              if key in seen:
+                  continue
+              seen.add(key)
+              deduped.append(item)
+          with open('catalogs/azure-documentation-full.json', 'w', encoding='utf-8') as f:
+              json.dump(deduped, f, ensure_ascii=False)
+          with open('catalogs/stats.json', 'w') as f:
+              json.dump({'total': len(deduped)}, f, indent=2)
+          print({'total': len(deduped)})
+          PY
+      - name: Upload catalog
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-azure-documentation-full-catalog
+          path: catalogs/
+          retention-days: 1
